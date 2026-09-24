@@ -1,9 +1,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FamilyAdapter, LimitHit, UsageRead } from "./adapter";
 import type { FamilyResolver } from "./families";
+import { detectClaudeLimit } from "./limits";
 import type { Reopener } from "./reopen";
 import { Service } from "./service";
 import { MAIN_ACCOUNT_ID, StateStore, type StoredState } from "./state";
@@ -76,13 +78,21 @@ function fakePaseo() {
   return { paseo, sent, notes };
 }
 
-async function setUp(state: Partial<StoredState>, hit: () => LimitHit) {
+interface SetUpOptions {
+  /** How `paseo agent reload` ends. */
+  reload?: "works" | "fails" | "times out";
+  /** Reads turns with a real detector instead of taking every failed turn for a limit. */
+  detectLimit?: FamilyAdapter["detectLimit"];
+}
+
+async function setUp(state: Partial<StoredState>, hit: () => LimitHit, options: SetUpOptions = {}) {
   const store = new StateStore(join(root, "state.json"));
   await store.update((draft) => Object.assign(draft, state));
   const reopened: string[] = [];
   const fake = fakePaseo();
   const context = { paseo: fake.paseo } as never;
-  // `paseo agent reload` returns once the reopened session has started, so the hook has run by then.
+  // Paseo asks for the new session's environment before it closes the old session, so the hook has
+  // run by the time `paseo agent reload` returns, even when the reload then failed.
   const reopenedSession = () =>
     service.onSessionOpen({ agentId: AGENT, provider: "claude", reason: "refresh", purpose: "interactive", env: {} } as never, context);
   const reopener = {
@@ -90,12 +100,17 @@ async function setUp(state: Partial<StoredState>, hit: () => LimitHit) {
     reopen: async (id: string) => {
       reopened.push(id);
       await reopenedSession();
+      if (options.reload === "fails") {
+        return { ok: false as const, error: "Timed out closing previous session during refresh", timedOut: false };
+      }
+      if (options.reload === "times out") return { ok: false as const, error: "Command failed: paseo agent reload", timedOut: true };
       return { ok: true as const };
     },
   };
   const families = { resolve: async () => ({ claude: "claude" as const }) };
+  const claude = { ...claudeAdapter(hit), ...(options.detectLimit ? { detectLimit: options.detectLimit } : {}) };
   const service = new Service(
-    { claude: claudeAdapter(hit), codex: claudeAdapter(hit) },
+    { claude, codex: claudeAdapter(hit) },
     store,
     families as unknown as FamilyResolver,
     reopener as unknown as Reopener,
@@ -164,6 +179,79 @@ describe("failover", () => {
     expect(reopened).toHaveLength(4);
     expect(notes.at(-1)).toMatchObject({ outcome: "stayed" });
     expect(notes.at(-1)?.detail).toMatch(/stopped switching it for now/);
+  });
+
+  it("doesn't blame the new account for the old one's limit when a message fails before its turn starts", async () => {
+    // A real incident: marketing's weekly limit moved the agent to hello, then a message hit a closed
+    // session. Paseo never started that turn, so the timeline still ended with marketing's notice.
+    const notice = "You've hit your weekly limit · resets Sep 25 at 3:30pm (Asia/Calcutta)";
+    const { service, store, reopened, notes, paseo } = await setUp(
+      {
+        accounts: [account(MAIN, "marketing", "main"), account(HELLO, "hello", "managed")] as never,
+        defaults: { claude: MAIN, codex: null },
+        sessions: {},
+      },
+      () => {
+        throw new Error("unused: the real detector reads the turns");
+      },
+      { detectLimit: detectClaudeLimit },
+    );
+    const context = { paseo } as never;
+    const agent = { id: AGENT, provider: "claude" };
+    const earlier: AgentTimelineItem[] = [
+      { type: "user_message", text: "fix the bug" },
+      { type: "assistant_message", text: notice },
+    ];
+    await service.onTurnEnded({ agent, turnId: "t1", outcome: { kind: "completed" }, timeline: earlier } as never, context);
+    expect((await store.read()).sessions[AGENT]?.accountId).toBe(HELLO);
+
+    const closed = "Claude session is closed";
+    await service.onTurnEnded(
+      {
+        agent,
+        turnId: null,
+        outcome: { kind: "failed", error: { message: closed } },
+        timeline: [...earlier, { type: "assistant_message", text: `[System Error] ${closed}` }],
+      } as never,
+      context,
+    );
+    expect((await store.read()).accounts.find((a) => a.id === HELLO)?.limitedUntil).toBeNull();
+    expect(reopened).toHaveLength(1);
+    expect(notes).toHaveLength(1);
+  });
+
+  it("keeps an agent's session where it was when Paseo can't reload it", async () => {
+    const openedAt = "2026-09-23T07:00:00.000Z";
+    const { store, reopened, notes, limitTurn } = await setUp(
+      {
+        accounts: [account(MAIN, "marketing", "main"), account(HELLO, "hello", "managed")] as never,
+        defaults: { claude: MAIN, codex: null },
+        sessions: { [AGENT]: { accountId: MAIN, family: "claude", openedAt } },
+      },
+      () => ({ kind: "window", resetsAt: inFuture(), message: "You've hit your weekly limit" }),
+      { reload: "fails" },
+    );
+    await limitTurn();
+    const state = await store.read();
+    expect(reopened).toEqual([AGENT]);
+    expect(state.bindings[AGENT]?.accountId).toBe(HELLO); // where it goes when its session next opens
+    expect(state.sessions[AGENT]).toEqual({ accountId: MAIN, family: "claude", openedAt });
+    expect(notes.at(-1)).toMatchObject({ from: "marketing", to: "hello", outcome: "pending" });
+  });
+
+  it("keeps the new session when the reload only ran out of time", async () => {
+    // The daemon may still finish a reload that the command-line tool stopped waiting for.
+    const { store, limitTurn } = await setUp(
+      {
+        accounts: [account(MAIN, "marketing", "main"), account(HELLO, "hello", "managed")] as never,
+        defaults: { claude: MAIN, codex: null },
+        sessions: { [AGENT]: { accountId: MAIN, family: "claude", openedAt: "2026-09-23T07:00:00.000Z" } },
+      },
+      () => ({ kind: "window", resetsAt: inFuture(), message: "You've hit your weekly limit" }),
+      { reload: "times out" },
+    );
+    await limitTurn();
+    expect((await store.read()).sessions[AGENT]?.accountId).toBe(HELLO);
   });
 });
 

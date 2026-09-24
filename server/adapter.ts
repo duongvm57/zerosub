@@ -35,6 +35,14 @@ export interface LimitHit {
   message: string;
 }
 
+/** A finished turn, as Paseo reports it. */
+export interface TurnEvent {
+  outcome: PluginTurnOutcome;
+  timeline: readonly AgentTimelineItem[];
+  /** Paseo's id for the turn; `null` when the turn failed before it started. */
+  turnId?: string | null;
+}
+
 export interface LoginProgress {
   step: LoginStep;
   /** Link that finishes by itself when opened on the daemon machine (localhost callback), or the device-code page. */
@@ -88,9 +96,9 @@ export interface FamilyAdapter {
   login(home: string | null, method: LoginMethod): Promise<LoginHandle>;
   logout(home: string): Promise<void>;
   /** Looks for a subscription usage-limit failure in a finished turn. */
-  detectLimit(event: { outcome: PluginTurnOutcome; timeline: readonly AgentTimelineItem[] }): LimitHit | null;
+  detectLimit(event: TurnEvent): LimitHit | null;
   /** Looks for a turn that failed because the account's login is no longer valid. */
-  detectSignOut(event: { outcome: PluginTurnOutcome; timeline: readonly AgentTimelineItem[] }): string | null;
+  detectSignOut(event: TurnEvent): string | null;
 }
 
 /** The environment for a process ZeroSub spawns against `patch`. */

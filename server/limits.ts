@@ -1,8 +1,4 @@
-import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
-import type { PluginTurnOutcome } from "@getpaseo/plugin/server";
-import type { LimitHit, LimitKind } from "./adapter";
-
-type TurnEvent = { outcome: PluginTurnOutcome; timeline: readonly AgentTimelineItem[] };
+import type { LimitHit, LimitKind, TurnEvent } from "./adapter";
 
 /**
  * Claude Code's exact wording for hard limits (2.1.x templates: `You've hit your ${limit}${suffix}`),
@@ -56,14 +52,17 @@ function clean(text: string): string {
 /**
  * Where a CLI-generated notice can appear in a finished turn: the failure message, error items,
  * Paseo's `[System Error]` rows, and — for Claude, which reports limits as a synthetic reply — the
- * final assistant messages. Ordinary replies earlier in the turn are never inspected.
+ * final assistant messages. Ordinary replies earlier in the turn are never inspected. A turn that
+ * failed before it started has only its failure: Paseo never recorded its message, so the timeline
+ * still ends with the previous turn.
  */
 function notices(event: TurnEvent, includeFinalReplies: boolean): string[] {
   const found: string[] = [];
   if (event.outcome.kind === "failed") found.push(event.outcome.error.message);
+  const timeline = event.turnId === null ? [] : event.timeline;
   let replies = 0;
-  for (let index = event.timeline.length - 1; index >= 0; index -= 1) {
-    const item = event.timeline[index];
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const item = timeline[index];
     if (!item) continue;
     if (item.type === "user_message") break;
     if (item.type === "error") found.push(item.message);
@@ -115,13 +114,15 @@ const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "
 
 /**
  * "· resets 3pm (Asia/Kolkata)", "· resets 3:30pm (America/New_York)",
- * "· resets Sep 25, 3pm (Europe/Berlin)", or the legacy "|1790150000" epoch.
+ * "· resets Sep 25, 3pm (Europe/Berlin)" ("Sep 25 at 3pm" where the CLI's ICU is newer), or the
+ * legacy "|1790150000" epoch. A reset in the next calendar year also carries the year
+ * ("Jan 2, 2027"), which rolling the date forward already gives.
  */
 export function parseClaudeReset(text: string, now: Date): string | null {
   const epoch = text.match(/usage limit reached\|(\d{9,})/i);
   if (epoch?.[1]) return new Date(Number(epoch[1]) * 1000).toISOString();
   const match = text.match(
-    /resets\s+(?:([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?(?:\s*\(([^)]+)\))?/i,
+    /resets\s+(?:([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2})(?:,?\s+\d{4})?,?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?(?:\s*\(([^)]+)\))?/i,
   );
   if (!match) return null;
   const [, monthName, dayText, hourText, minuteText, meridiem, zone] = match;

@@ -115,6 +115,29 @@ describe("detectClaudeLimit", () => {
   });
 });
 
+describe("a turn that failed before it started", () => {
+  // A message sent to a closed session: Paseo never starts the turn (so it has no id) or records the
+  // message, and the timeline still ends with the previous turn, plus the failure's own error row.
+  const closed = failed("Claude session is closed");
+  const after = (...texts: string[]): AgentTimelineItem[] => [
+    ...turn(...texts),
+    { type: "assistant_message", text: "[System Error] Claude session is closed" },
+  ];
+
+  it("doesn't read the previous turn's limit or sign-out again", () => {
+    const timeline = after("You've hit your weekly limit · resets Sep 25 at 3:30pm (Asia/Calcutta)");
+    expect(detectClaudeLimit({ outcome: closed, timeline, turnId: null }, NOW)).toBeNull();
+    expect(detectClaudeSignOut({ outcome: closed, timeline: after("Not logged in · Please run /login"), turnId: null })).toBeNull();
+    const codex = after("[System Error] You’ve hit your usage limit. Try again at 3:45 PM.");
+    expect(detectCodexLimit({ outcome: failed("stream disconnected"), timeline: codex, turnId: null }, NOW)).toBeNull();
+  });
+
+  it("still reads its own failure", () => {
+    const hit = detectClaudeLimit({ outcome: failed("Claude AI usage limit reached|1790150000"), timeline: after("Done."), turnId: null }, NOW);
+    expect(hit?.resetsAt).toBe(new Date(1790150000 * 1000).toISOString());
+  });
+});
+
 describe("detectCodexLimit", () => {
   it("recognises the ChatGPT plan limit with a typographic apostrophe", () => {
     const hit = detectCodexLimit(
@@ -157,6 +180,15 @@ describe("reset parsing", () => {
   it("rolls a time that already passed today over to tomorrow", () => {
     expect(parseClaudeReset("resets 9am (Asia/Kolkata)", NOW)).toBe("2026-09-24T03:30:00.000Z");
     expect(parseCodexReset("try again at 9:00 AM.", new Date(2026, 8, 23, 10, 0))).toBe(new Date(2026, 8, 24, 9, 0).toISOString());
+  });
+
+  it("reads the dates newer Claude Code builds print", () => {
+    // Newer ICU joins the date and time with "at", and either form adds the year when the reset is next year.
+    expect(parseClaudeReset("You've hit your weekly limit · resets Sep 25 at 3:30pm (Asia/Calcutta)", NOW)).toBe(
+      "2026-09-25T10:00:00.000Z",
+    );
+    expect(parseClaudeReset("resets Jan 2, 2027 at 9am (UTC)", NOW)).toBe("2027-01-02T09:00:00.000Z");
+    expect(parseClaudeReset("resets Jan 2, 2027, 9am (UTC)", NOW)).toBe("2027-01-02T09:00:00.000Z");
   });
 
   it("reads an explicit date and year from Codex", () => {

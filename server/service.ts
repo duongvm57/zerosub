@@ -1049,9 +1049,20 @@ export class Service {
       }
       return "closed";
     }
+    const before = (await this.store.read()).sessions[agentId];
     const result = await this.reopener.reopen(agentId);
     if (!result.ok) {
       console.warn(`[ZeroSub] could not reopen ${agentId}: ${result.error}`);
+      // Paseo asks for the new session's environment before it closes the old one, so a failed reload
+      // has still recorded a session that never opened. One that ran out of time may yet open.
+      if (!result.timedOut) {
+        await this.store.update((draft) => {
+          const recorded = draft.sessions[agentId];
+          if (!recorded || recorded.openedAt === before?.openedAt) return;
+          if (before) draft.sessions[agentId] = before;
+          else delete draft.sessions[agentId];
+        });
+      }
       return "failed";
     }
     return "reopened";

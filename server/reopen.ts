@@ -22,9 +22,10 @@ export class Reopener {
     return this.cli.path;
   }
 
-  async reopen(agentId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  /** `timedOut`: the command was stopped before the daemon answered, so the reload may still finish. */
+  async reopen(agentId: string): Promise<{ ok: true } | { ok: false; error: string; timedOut: boolean }> {
     const cli = await this.locate();
-    if (!cli) return { ok: false, error: "The paseo command-line tool was not found on the daemon machine." };
+    if (!cli) return { ok: false, error: "The paseo command-line tool was not found on the daemon machine.", timedOut: false };
     return new Promise((resolve) => {
       execFile(
         cli,
@@ -33,7 +34,7 @@ export class Reopener {
         (error, _stdout, stderr) => {
           if (!error) return resolve({ ok: true });
           const detail = `${stderr || error.message}`.trim().split("\n").slice(-3).join(" ");
-          resolve({ ok: false, error: explainFailure(detail) });
+          resolve({ ok: false, error: explainFailure(detail), timedOut: error.killed === true });
         },
       );
     });
