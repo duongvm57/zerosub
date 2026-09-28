@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import type {
   PluginHookContext,
   PluginLifecycleEvents,
@@ -22,6 +21,7 @@ import type { RedeemResult, ReopenSummary } from "../shared/rpc";
 import { SWITCH_ROW_KIND, SWITCH_ROW_VERSION, type SwitchRow } from "../shared/timeline";
 import {
   applyEnv,
+  type AgentTimelineItem,
   type FamilyAdapter,
   type Identity,
   type LimitHit,

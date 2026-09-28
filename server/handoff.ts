@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import type { PluginHookContext } from "@getpaseo/plugin/server";
+import type { AgentTimelineItem } from "./adapter";
 
 type PaseoApi = PluginHookContext["paseo"];
 

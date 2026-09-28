@@ -1,7 +1,12 @@
-import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
-import type { PluginTurnOutcome } from "@getpaseo/plugin/server";
+import type { PluginLifecycleEvents, PluginTurnOutcome } from "@getpaseo/plugin/server";
 import type { Family, LoginMethod, LoginStep, Usage } from "../shared/model";
 import type { RedeemOutcome } from "../shared/rpc";
+
+/**
+ * One timeline entry. Taken from the SDK rather than `@getpaseo/protocol`: Paseo only supplies
+ * `@getpaseo/plugin` to plugins, and an npm install has no devDependencies to resolve it from.
+ */
+export type AgentTimelineItem = PluginLifecycleEvents["agent.turn_ended"]["timeline"][number];
 
 /** A provider's answer to a redeem request. */
 export interface RedeemReply {

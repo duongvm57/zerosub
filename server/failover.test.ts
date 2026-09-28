@@ -1,9 +1,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { FamilyAdapter, LimitHit, UsageRead } from "./adapter";
+import type { AgentTimelineItem, FamilyAdapter, LimitHit, UsageRead } from "./adapter";
 import type { FamilyResolver } from "./families";
 import { detectClaudeLimit } from "./limits";
 import type { Reopener } from "./reopen";
