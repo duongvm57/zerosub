@@ -138,7 +138,7 @@ paseo plugin logs zerosub
 
 Code layout:
 
-- `client/`: React Native UI (Accounts surface, sign-in modal, composer pill, commands, timeline note).
+- `client/`: React Native UI (Accounts surface, sign-in modal, composer pill, commands, timeline note). The client bundle is evaluated with `eval` under Hermes on Android, where constructors created inside eval'd code lose their prototype — so the store is a factory (`createZeroSubStore`), not a class. `npm test` includes a bundle-compat check for this.
 - `server/`: routing, account homes, Claude and Codex adapters, failover.
 - `shared/`: RPC contracts and the view model.
 
