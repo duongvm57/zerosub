@@ -197,6 +197,16 @@ describe("portable conversations (Codex)", () => {
     expect(decision?.account.id).toBe("codex-work");
     expect(decision?.bind).toMatchObject({ accountId: "codex-work", source: "auto" });
   });
+
+  it("keeps a held conversation on its own account, even when that account is limited", () => {
+    const limited = account({ id: "codex-main", family: "codex", kind: "main", home: null, limitedUntil: "2026-09-23T14:00:00Z" });
+    const state = stateWith([limited, work], {
+      bindings: { "agent-1": { accountId: "codex-main", source: "held", at: "x" } },
+    });
+    const decision = chooseAccount(state, { ...codex, reason: "resume", usageOf: () => null });
+    expect(decision?.account.id).toBe("codex-main");
+    expect(decision?.skipped).toBeNull();
+  });
 });
 
 describe("applyEnv", () => {

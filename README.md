@@ -51,7 +51,7 @@ Then open **Accounts (ZeroSub)** in the sidebar.
 ### Claude vs. ChatGPT when switching mid-conversation
 
 - **Claude:** a conversation moves to another account in place. The agent reopens on the new account with its full history and continues.
-- **ChatGPT (Codex):** an existing conversation switches accounts in the same Paseo agent. ZeroSub prepares the selected `CODEX_HOME`, keeps `sessions` and the shared `CODEX_SQLITE_HOME`, then reloads the agent so Codex resumes the same rollout. A limit or a manual choice therefore keeps the same agent and history; it never creates a Codex→Codex continuation agent. If Paseo cannot reload the session, the binding is recorded for the next session and the timeline explains the failure. Claude↔Codex continuation remains an explicit new-agent fork.
+- **ChatGPT (Codex):** an existing conversation switches accounts in the same Paseo agent. ZeroSub prepares the selected `CODEX_HOME`, keeps `sessions` and the shared `CODEX_SQLITE_HOME`, then reloads the agent so Codex resumes the same rollout. A limit or a manual choice therefore keeps the same agent and history; it never creates a Codex→Codex continuation agent. Codex encrypts each thread's reasoning per ChatGPT account, so a reload succeeding is not proof the conversation resumed: if the first turn on the new account fails (`invalid_encrypted_content`, an `organization_id` mismatch), ZeroSub moves the agent back to the account the thread belongs to, corrects the timeline, and leaves the switch pending rather than claiming it. If Paseo cannot reload the session at all, the binding is recorded for the next session. Claude↔Codex continuation remains an explicit new-agent fork.
 
 ### Banked resets
 

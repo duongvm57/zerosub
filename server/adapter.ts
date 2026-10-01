@@ -104,6 +104,12 @@ export interface FamilyAdapter {
   detectLimit(event: TurnEvent): LimitHit | null;
   /** Looks for a turn that failed because the account's login is no longer valid. */
   detectSignOut(event: TurnEvent): string | null;
+  /**
+   * Looks for a turn that failed because the resumed conversation belongs to another account.
+   * Only adapters whose sessions can hit this (Codex reloads a thread under a different home)
+   * implement it; its presence is what makes a reopened session worth verifying on its next turn.
+   */
+  detectResumeFailure?(event: TurnEvent): string | null;
 }
 
 /** The environment for a process ZeroSub spawns against `patch`. */

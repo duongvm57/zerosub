@@ -2,9 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { PluginLifecycleEvents } from "@getpaseo/plugin/server";
 import type { FamilyAdapter, LimitHit, UsageRead } from "./adapter";
 import { CodexAdapter } from "./codex";
 import type { FamilyResolver } from "./families";
+import { detectCodexResumeFailure } from "./limits";
 import type { Reopener } from "./reopen";
 import { Service } from "./service";
 import { MAIN_ACCOUNT_ID, StateStore } from "./state";
@@ -22,6 +24,19 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
+
+/** A real `agent.turn_ended` event for AGENT, as Paseo delivers it. */
+function turnEnded(
+  outcome: PluginLifecycleEvents["agent.turn_ended"]["outcome"],
+  timeline: PluginLifecycleEvents["agent.turn_ended"]["timeline"] = [],
+): PluginLifecycleEvents["agent.turn_ended"] {
+  return {
+    agent: { id: AGENT, workspaceId: null, parentAgentId: null, provider: "codex", cwd: root, title: null },
+    turnId: "turn-next",
+    outcome,
+    timeline,
+  };
+}
 
 function account(id: string, label: string, home: string | null) {
   return {
@@ -109,6 +124,8 @@ async function harness(options: HarnessOptions = {}) {
     logout: async () => undefined,
     detectLimit: () => (options.limit ? hit : null),
     detectSignOut: () => null,
+    // The real detector: the tests feed it the real `agent.turn_ended` contract, not a stub.
+    detectResumeFailure: detectCodexResumeFailure,
   } as unknown as FamilyAdapter;
   const context = { paseo } as never;
   const reopener = {
@@ -178,5 +195,88 @@ describe("Codex same-session account switching", () => {
     expect(state.bindings[AGENT]?.accountId).toBe(WORK);
     expect(state.sessions[AGENT]?.accountId).toBe(MAIN);
     expect(notes.at(-1)).toMatchObject({ from: "personal", to: "work", outcome: "pending" });
+  });
+});
+
+describe("a switch whose resumed session then fails", () => {
+  it("moves the agent back to the thread's account and corrects the switched note", async () => {
+    const { service, store, paseo, notes, created, reloads } = await harness();
+
+    await service.setAgentAccount(paseo as never, AGENT, WORK);
+    // `paseo agent reload` succeeded and the note says switched — but the resume is only proven
+    // when the session's next turn runs, which is where Codex rejects a foreign thread.
+    await service.onTurnEnded(
+      turnEnded({ kind: "failed", error: { message: "400 Bad Request", code: "invalid_encrypted_content" } }),
+      { paseo } as never,
+    );
+
+    const state = await store.read();
+    expect(created).toHaveLength(0);
+    expect(reloads).toEqual([AGENT, AGENT]); // switched, then reopened back onto its own account
+    expect(state.bindings[AGENT]).toMatchObject({ accountId: MAIN, source: "held" });
+    expect(state.sessions[AGENT]?.accountId).toBe(MAIN);
+    const note = notes.at(-1);
+    expect(note).toMatchObject({ from: "personal", to: "personal", outcome: "stayed" });
+    expect(String(note?.detail)).toContain("invalid_encrypted_content");
+    expect(String(note?.detail)).toContain("work");
+  });
+
+  it("keeps the switch pending when the thread's account can't take it back yet", async () => {
+    const { service, store, paseo, notes, created, reloads } = await harness();
+
+    await service.setAgentAccount(paseo as never, AGENT, WORK);
+    await store.update((state) => {
+      const main = state.accounts.find((a) => a.id === MAIN);
+      if (main) main.limitedUntil = new Date(Date.now() + 3_600_000).toISOString();
+    });
+    await service.onTurnEnded(
+      turnEnded(
+        { kind: "failed", error: { message: "stream disconnected" } },
+        [{ type: "error", message: "resume failed: organization_id mismatch with the thread's account" }],
+      ),
+      { paseo } as never,
+    );
+
+    const state = await store.read();
+    expect(created).toHaveLength(0);
+    expect(reloads).toEqual([AGENT]); // no reload onto the limited account; the held pin waits
+    expect(state.bindings[AGENT]).toMatchObject({ accountId: MAIN, source: "held" });
+    expect(state.sessions[AGENT]?.accountId).toBe(WORK); // the session is still on the account it can't use
+    const note = notes.at(-1);
+    expect(note).toMatchObject({ outcome: "pending", to: "personal" });
+    expect(String(note?.detail)).toContain("organization_id");
+  });
+
+  it("keeps the switch once a completed turn proves the resume worked", async () => {
+    const { service, store, paseo, notes, reloads } = await harness();
+
+    await service.setAgentAccount(paseo as never, AGENT, WORK);
+    await service.onTurnEnded(turnEnded({ kind: "completed" }), { paseo } as never);
+    // The marker is consumed: a later matching failure must not bounce a settled switch.
+    await service.onTurnEnded(
+      turnEnded({ kind: "failed", error: { message: "invalid_encrypted_content" } }),
+      { paseo } as never,
+    );
+
+    const state = await store.read();
+    expect(state.bindings[AGENT]).toMatchObject({ accountId: WORK });
+    expect(state.sessions[AGENT]?.accountId).toBe(WORK);
+    expect(reloads).toEqual([AGENT]);
+    expect(notes.filter((note) => note.outcome === "stayed" || note.outcome === "pending")).toHaveLength(0);
+  });
+
+  it("waits through an unrelated failure instead of settling early", async () => {
+    const { service, store, paseo, notes, reloads } = await harness();
+
+    await service.setAgentAccount(paseo as never, AGENT, WORK);
+    await service.onTurnEnded(
+      turnEnded({ kind: "failed", error: { message: "stream disconnected before completion" } }),
+      { paseo } as never,
+    );
+
+    const state = await store.read();
+    expect(reloads).toEqual([AGENT]);
+    expect(state.sessions[AGENT]?.accountId).toBe(WORK);
+    expect(notes.at(-1)).toMatchObject({ outcome: "switched" });
   });
 });

@@ -91,7 +91,8 @@ export function chooseAccount(state: StoredState, input: RouteInput): RouteDecis
 
   const savedBinding = state.bindings[input.agentId];
   // Older ZeroSub versions used `thread` to pin Codex conversations. Once an adapter is portable,
-  // that legacy pin must not defeat the default or an automatic switch.
+  // that legacy pin must not defeat the default or an automatic switch. A `held` pin is different:
+  // the conversation already failed to resume elsewhere, so it stays where the thread works.
   const binding = input.portable && savedBinding?.source === "thread" ? undefined : savedBinding;
   const bound = findAccount(state, binding?.accountId);
   let account = bound && bound.family === input.family ? bound : undefined;
@@ -112,7 +113,7 @@ export function chooseAccount(state: StoredState, input: RouteInput): RouteDecis
 
   let skipped: RouteDecision["skipped"] = null;
   const why = !account.signedIn ? "signed_out" : account.disabled ? "disabled" : isLimited(account, input.now) ? "limited" : null;
-  const mayMove = fresh || input.portable;
+  const mayMove = fresh || (input.portable && savedBinding?.source !== "held");
   if (why && mayMove && (input.autoSwitch || why !== "limited")) {
     const alternative = mostAvailable(state, input.family, input.usageOf, input.now, new Set([account.id]));
     if (alternative) {

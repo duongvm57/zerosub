@@ -42,6 +42,14 @@ const CLAUDE_SIGNED_OUT =
 const CODEX_SIGNED_OUT =
   /refresh token was already used|please log out and sign in again|access token could not be refreshed|refresh_token_reused|refresh_token_expired/i;
 
+/**
+ * A Codex thread resumed under the wrong ChatGPT account: the API rejects its encrypted reasoning
+ * (`invalid_encrypted_content` / "encrypted content … could not be verified") or the thread's
+ * recorded `organization_id` doesn't match the account's. It can arrive as the turn's error code
+ * or message, a timeline `error`/`notification` item, or a `[System Error]` reply.
+ */
+const CODEX_RESUME_FAILURE = /invalid_encrypted_content|organization_id|encrypted content/i;
+
 const SYSTEM_ERROR = /^\[System Error\]\s*/;
 const MAX_NOTICE = 400;
 
@@ -105,6 +113,22 @@ export function detectClaudeSignOut(event: TurnEvent): string | null {
 
 export function detectCodexSignOut(event: TurnEvent): string | null {
   for (const text of notices(event, false)) if (CODEX_SIGNED_OUT.test(text)) return firstLine(text);
+  return null;
+}
+
+/**
+ * A finished turn that failed because the conversation was resumed under a different ChatGPT
+ * account — the failure only shows once the session actually runs, not when Paseo reloads it.
+ */
+export function detectCodexResumeFailure(event: TurnEvent): string | null {
+  if (event.outcome.kind === "failed") {
+    const code = event.outcome.error.code;
+    if (code && CODEX_RESUME_FAILURE.test(code)) {
+      const message = firstLine(event.outcome.error.message || code);
+      return CODEX_RESUME_FAILURE.test(message) ? message : `${message} (${code})`;
+    }
+  }
+  for (const text of notices(event, false)) if (CODEX_RESUME_FAILURE.test(text)) return firstLine(text);
   return null;
 }
 

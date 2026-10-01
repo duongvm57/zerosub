@@ -117,6 +117,20 @@ interface AgentInfo {
 type ReopenOutcome = "reopened" | "deferred" | "closed" | { kind: "failed"; error: string };
 type Problem = { kind: "limit"; hit: LimitHit } | { kind: "signed_out" };
 
+/**
+ * A session that reopened onto another account but hasn't run a turn there yet. Whether the
+ * conversation actually resumes is only known when that first turn finishes (Codex rejects a
+ * foreign thread's encrypted content then, not at reload).
+ */
+interface PendingSwitch {
+  family: Family;
+  /** The account the thread belonged to (and can still resume on). */
+  from: string;
+  /** The account the session reopened on. */
+  to: string;
+  reason: SwitchRow["reason"];
+}
+
 /** The agent has a running CLI session (idle between turns counts). */
 function isLive(status: string): boolean {
   return status === "idle" || status === "running" || status === "initializing";
@@ -138,6 +152,8 @@ export class Service {
   private readonly loginLocks: Record<Family, Mutex> = { claude: new Mutex(), codex: new Mutex() };
   /** Agents whose account changed mid-turn; reopened when the turn ends. */
   private readonly deferred = new Map<string, SwitchRow | null>();
+  /** Switches whose resumed session still has to prove itself on the next turn. */
+  private readonly pendingSwitches = new Map<string, PendingSwitch>();
   /** Agents in the middle of a failover, so nothing else moves them at the same time. */
   private readonly switching = new Set<string>();
   /** One failover at a time per exhausted account. */
@@ -403,6 +419,20 @@ export class Service {
     const agentId = event.agent.id;
     const accountId = this.runningOn(await this.store.read(), agentId, family);
     if (accountId) this.activeAt.set(accountId, Date.now());
+    const pending = this.pendingSwitches.get(agentId);
+    if (pending?.family === family) {
+      if (event.outcome.kind === "completed") {
+        // The conversation really did resume on the new account; the switch stands.
+        this.pendingSwitches.delete(agentId);
+      } else if (event.outcome.kind === "failed") {
+        const resumeError = adapter.detectResumeFailure?.(event);
+        if (resumeError) {
+          this.pendingSwitches.delete(agentId);
+          await this.settleFailedResume(context.paseo, agentId, pending, resumeError);
+          return;
+        }
+      }
+    }
     if (event.outcome.kind !== "canceled") {
       const hit = adapter.detectLimit(event);
       if (hit) return this.handleUnavailable(context.paseo, agentId, family, event.timeline, { kind: "limit", hit });
@@ -417,6 +447,7 @@ export class Service {
 
   async onAgentArchived(agentId: string): Promise<void> {
     this.deferred.delete(agentId);
+    this.pendingSwitches.delete(agentId);
     this.switchGuard.forget(agentId);
     this.guardNoticeAt.delete(agentId);
     if (!(await this.store.read()).sessions[agentId]) return;
@@ -432,6 +463,85 @@ export class Service {
     if (!accountId) return false;
     await this.refreshIdentity(accountId);
     return findAccount(await this.store.read(), accountId)?.signedIn === false;
+  }
+
+  /**
+   * Records that `agentId` reopened on `to` while its thread still belongs to `from`; the first
+   * turn on `to` decides whether the switch was real. Only adapters that can spot a foreign
+   * thread (Codex) get a marker.
+   */
+  private notePendingSwitch(agentId: string, family: Family, from: string, to: string, reason: SwitchRow["reason"]): void {
+    if (typeof this.adapters[family].detectResumeFailure !== "function") return;
+    const existing = this.pendingSwitches.get(agentId);
+    // Hops without a proven resume in between keep the original owner: the thread is still its.
+    this.pendingSwitches.set(agentId, { family, from: existing?.from ?? from, to, reason });
+  }
+
+  /**
+   * A portable switch's session reopened but its first turn proved the conversation can't run on
+   * the new account. Pin the agent back on the account the thread belongs to (`held`), reopen it
+   * there when that's usable right now, and correct the timeline — the earlier "switched" note must
+   * never be the last word. No continuation is started here.
+   */
+  private async settleFailedResume(paseo: PaseoApi, agentId: string, pending: PendingSwitch, message: string): Promise<void> {
+    const now = Date.now();
+    const state = await this.store.read();
+    const from = findAccount(state, pending.from);
+    const target = findAccount(state, pending.to);
+    const toLabel = target?.label ?? pending.to;
+    const short = (message.split("\n")[0] ?? message).trim().slice(0, 200);
+    const base = {
+      family: pending.family,
+      reason: pending.reason,
+      resetsAt: null,
+      continued: false,
+      continuedIn: null,
+      toFamily: null,
+      at: new Date(now).toISOString(),
+    };
+
+    await this.store.update((draft) => {
+      if (from) draft.bindings[agentId] = { accountId: from.id, source: "held", at: new Date(now).toISOString() };
+      else delete draft.bindings[agentId];
+    });
+    console.warn(`[ZeroSub] ${agentId} couldn't resume on ${toLabel}; holding it on ${from?.label ?? "its default"}: ${short}`);
+
+    const usable = Boolean(from && from.signedIn && !from.disabled && !isLimited(from, now));
+    let restored = false;
+    if (from && usable) {
+      const outcome = await this.reopenAgent(paseo, agentId, null, true);
+      restored = outcome === "reopened" && (await this.store.read()).sessions[agentId]?.accountId === from.id;
+    }
+    this.pendingSwitches.delete(agentId); // Reopening back re-arms a marker; the restore settles it.
+
+    if (restored && from) {
+      await this.appendRow(paseo, agentId, {
+        ...base,
+        from: from.label,
+        to: from.label,
+        outcome: "stayed",
+        detail: `Codex couldn't resume the conversation on ${toLabel} (${short}), so it stays on ${from.label}.`,
+      });
+      return;
+    }
+    if (from) {
+      // The session still runs on the account it can't use; the held pin brings it back next open.
+      await this.appendRow(paseo, agentId, {
+        ...base,
+        from: toLabel,
+        to: from.label,
+        outcome: "pending",
+        detail: `Codex couldn't resume the conversation on ${toLabel}: ${short}`,
+      });
+      return;
+    }
+    await this.appendRow(paseo, agentId, {
+      ...base,
+      from: toLabel,
+      to: toLabel,
+      outcome: "stayed",
+      detail: `Codex couldn't resume the conversation on ${toLabel} (${short}), and the account it belongs to is gone. Start a new agent to carry on.`,
+    });
   }
 
   /** Carries out a switch that waited for the agent's turn to end, unless it's no longer wanted. */
@@ -625,12 +735,15 @@ export class Service {
       return;
     }
 
-    if (adapter.portable) {
+    // A `held` conversation already proved it can't resume on another account: it keeps the same
+    // non-portable treatment — a new-agent continuation — instead of reopening into another failure.
+    if (adapter.portable && latest.bindings[agentId]?.source !== "held") {
       await this.store.update((draft) => {
         draft.bindings[agentId] = { accountId: next.id, source: "auto", at: new Date(now).toISOString() };
       });
       this.switchGuard.note(agentId, now);
       const outcome = await this.reopenAgent(paseo, agentId, null, true);
+      if (outcome === "reopened") this.notePendingSwitch(agentId, family, account.id, next.id, reason);
       const continued = outcome === "reopened" && this.prefs.autoContinue;
       const reloadError = typeof outcome === "object" ? outcome.error : null;
       const row = await this.landed(
@@ -840,6 +953,7 @@ export class Service {
           agent.id !== except &&
           !agent.archived &&
           families[agent.provider] === family &&
+          state.bindings[agent.id]?.source !== "held" &&
           this.runningOn(state, agent.id, family) === accountId,
       )
       .map((agent) => agent.id);
@@ -860,6 +974,7 @@ export class Service {
         });
         this.switchGuard.note(agentId, now);
         if ((await this.reopenAgent(paseo, agentId)) !== "reopened") continue;
+        this.notePendingSwitch(agentId, family, accountId, next.id, reason);
         const row: SwitchRow = {
           family,
           from: from?.label ?? null,
@@ -995,7 +1110,7 @@ export class Service {
         await this.store.update((draft) => {
           draft.bindings[newAgentId] = {
             accountId: target.id,
-            source: source === "user" ? "user" : "thread",
+            source: source === "user" ? "user" : this.adapters[target.family].portable ? "auto" : "thread",
             at: new Date().toISOString(),
           };
         });
@@ -1060,7 +1175,10 @@ export class Service {
       }
       return "closed";
     }
-    const before = (await this.store.read()).sessions[agentId];
+    const stateBefore = await this.store.read();
+    const before = stateBefore.sessions[agentId];
+    // Sessions ZeroSub never routed still ran on the CLI login: that's the account to restore to.
+    const fromId = family ? (before?.accountId ?? mainAccount(stateBefore, family)?.id) : undefined;
     const result = await this.reopener.reopen(agentId);
     if (!result.ok) {
       console.warn(`[ZeroSub] could not reopen ${agentId}: ${result.error}`);
@@ -1075,6 +1193,10 @@ export class Service {
         });
       }
       return { kind: "failed", error: result.error };
+    }
+    const landedOn = (await this.store.read()).sessions[agentId]?.accountId;
+    if (family && fromId && landedOn && landedOn !== fromId) {
+      this.notePendingSwitch(agentId, family, fromId, landedOn, row?.reason ?? "manual");
     }
     return "reopened";
   }

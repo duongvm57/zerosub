@@ -4,6 +4,7 @@ import {
   detectClaudeLimit,
   detectClaudeSignOut,
   detectCodexLimit,
+  detectCodexResumeFailure,
   detectCodexSignOut,
   parseClaudeReset,
   parseCodexReset,
@@ -173,6 +174,43 @@ describe("detectCodexLimit", () => {
     ]) {
       expect(detectCodexLimit({ outcome: completed, timeline: turn(reply) }, NOW)).toBeNull();
     }
+  });
+});
+
+describe("detectCodexResumeFailure", () => {
+  it("recognises invalid_encrypted_content as the turn's error code", () => {
+    const event = {
+      outcome: { kind: "failed", error: { message: "400 Bad Request", code: "invalid_encrypted_content" } },
+      timeline: [],
+    } as const;
+    expect(detectCodexResumeFailure(event)).not.toBeNull();
+  });
+
+  it("recognises the API's wording for a foreign thread's encrypted reasoning", () => {
+    const event = {
+      outcome: failed("The encrypted content for item 'rs_123' could not be verified."),
+      timeline: [],
+    };
+    expect(detectCodexResumeFailure(event)).not.toBeNull();
+  });
+
+  it("recognises an organization_id mismatch reported on the timeline", () => {
+    const timeline: AgentTimelineItem[] = [
+      { type: "user_message", text: "continue" },
+      { type: "error", message: "resume failed: organization_id mismatch with the thread's account" },
+    ];
+    expect(detectCodexResumeFailure({ outcome: failed("stream disconnected"), timeline })).not.toBeNull();
+    const notice: AgentTimelineItem[] = [{ type: "notification", level: "error", message: "organization_id does not match" }];
+    expect(detectCodexResumeFailure({ outcome: failed("stream disconnected"), timeline: notice })).not.toBeNull();
+  });
+
+  it("ignores ordinary failures, completed turns and unrelated codes", () => {
+    expect(detectCodexResumeFailure({ outcome: failed("stream disconnected before completion"), timeline: [] })).toBeNull();
+    expect(
+      detectCodexResumeFailure({ outcome: { kind: "failed", error: { message: "bad request", code: "invalid_request" } }, timeline: [] }),
+    ).toBeNull();
+    expect(detectCodexResumeFailure({ outcome: completed, timeline: turn("All done.") })).toBeNull();
+    expect(detectCodexSignOut({ outcome: failed("invalid_encrypted_content"), timeline: [] })).toBeNull();
   });
 });
 

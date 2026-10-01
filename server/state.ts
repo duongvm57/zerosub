@@ -35,8 +35,10 @@ export const BindingSchema = z.object({
   /**
    * `user`: chosen in the UI. `auto`: moved after a limit. `balance`: spread at creation.
    * `thread`: a legacy or non-portable conversation pinned where it started.
+   * `held`: a conversation whose resume under another account already failed once; it is pinned
+   * where the thread still works, and portable routing must not move it again on its own.
    */
-  source: z.enum(["user", "auto", "balance", "thread"]),
+  source: z.enum(["user", "auto", "balance", "thread", "held"]),
   at: z.string(),
 });
 export type Binding = z.infer<typeof BindingSchema>;

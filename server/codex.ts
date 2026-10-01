@@ -12,7 +12,7 @@ import {
 } from "./adapter";
 import { providerCommand } from "./binaries";
 import { codexSqliteHome, prepareCodexHome } from "./homes";
-import { detectCodexLimit, detectCodexSignOut } from "./limits";
+import { detectCodexLimit, detectCodexResumeFailure, detectCodexSignOut } from "./limits";
 import { run } from "./process";
 
 /** The originator Codex's own CLI logs in with; the sign-in service knows it. */
@@ -308,6 +308,7 @@ export class CodexAdapter implements FamilyAdapter {
 
   detectLimit = detectCodexLimit;
   detectSignOut = detectCodexSignOut;
+  detectResumeFailure = detectCodexResumeFailure;
 }
 
 class CodexLogin extends ProgressEmitter implements LoginHandle {
