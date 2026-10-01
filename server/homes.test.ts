@@ -2,12 +2,14 @@ import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, utime
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { CodexAdapter } from "./codex";
 import { mergeShared, prepareClaudeHome, prepareCodexHome, removeHome } from "./homes";
 
 let root: string;
 const saved = {
   CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
   CODEX_HOME: process.env.CODEX_HOME,
+  CODEX_SQLITE_HOME: process.env.CODEX_SQLITE_HOME,
   PASEO_HOME: process.env.PASEO_HOME,
 };
 
@@ -152,6 +154,16 @@ describe("prepareCodexHome", () => {
     for (const name of ["auth.json", "models_cache.json", "state_5.sqlite", "state_5.sqlite-wal", "..codex-global-state.json.tmp-1"]) {
       expect(await lstat(join(home, name)).catch(() => null)).toBeNull();
     }
+  });
+
+  it("routes a managed home to the shared Codex SQLite state", async () => {
+    const main = join(root, "codex");
+    const home = join(root, "homes", "codex-b");
+    process.env.CODEX_HOME = main;
+    delete process.env.CODEX_SQLITE_HOME;
+    await mkdir(main, { recursive: true });
+
+    await expect(new CodexAdapter().env(home)).resolves.toEqual({ CODEX_HOME: home, CODEX_SQLITE_HOME: main });
   });
 });
 

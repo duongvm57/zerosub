@@ -169,7 +169,7 @@ function buttonFor(
     await store.rpc(setAgentAccount, { agentId: agent.id, accountId });
   };
 
-  // Codex threads can't change ChatGPT accounts in place; picking one continues in a new agent.
+  // A non-portable provider exposes the choice as a new-agent continuation.
   const movable = route?.movable ?? true;
   const items: PluginButtonMenuEntry[] = accounts.map((account, index) => ({
     kind: "item",

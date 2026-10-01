@@ -87,9 +87,8 @@ export const AgentRouteSchema = z.object({
   /** The live session still runs on a different account and is waiting to be reopened. */
   pendingAccountId: z.string().nullable(),
   /**
-   * The conversation can move to another account in place. False for Codex agents that already
-   * have history: ChatGPT accounts can't read each other's encrypted reasoning, so switching
-   * continues the work in a new agent instead.
+   * The conversation can move to another account in place. A provider adapter may set this false
+   * when its existing sessions cannot be reopened under another account.
    */
   movable: z.boolean(),
 });

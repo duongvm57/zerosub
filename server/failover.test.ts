@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentTimelineItem, FamilyAdapter, LimitHit, UsageRead } from "./adapter";
+import { CodexAdapter } from "./codex";
 import type { FamilyResolver } from "./families";
 import { detectClaudeLimit } from "./limits";
 import type { Reopener } from "./reopen";
@@ -321,7 +322,7 @@ describe("forking to the other provider", () => {
     const service = new Service(
       {
         claude: claudeAdapter(() => ({ kind: "window", resetsAt: inFuture(), message: "You've hit your session limit" })),
-        codex: { ...claudeAdapter(() => ({ kind: "window", resetsAt: null, message: "" })), family: "codex", portable: false } as FamilyAdapter,
+        codex: { ...claudeAdapter(() => ({ kind: "window", resetsAt: null, message: "" })), family: "codex", portable: new CodexAdapter().portable } as FamilyAdapter,
       },
       store,
       { resolve: async () => ({ claude: "claude" as const, codex: "codex" as const }) } as unknown as FamilyResolver,
@@ -346,7 +347,7 @@ describe("forking to the other provider", () => {
     expect(fork?.title).toBe("Fix the build (continued on ChatGPT)");
     expect(fork?.labels).toEqual({ "zerosub.continued-from": AGENT });
     expect(fork?.prompt).toMatch(/earlier Claude Code session that stopped because every Claude account reached its usage limit/);
-    expect((await store.read()).bindings[fork?.agentId ?? ""]).toMatchObject({ accountId: CODEX_MAIN, source: "thread" });
+    expect((await store.read()).bindings[fork?.agentId ?? ""]).toMatchObject({ accountId: CODEX_MAIN, source: "auto" });
     expect(notes.at(-1)).toMatchObject({ outcome: "continued", toFamily: "codex", to: "hello", continuedIn: { agentId: fork?.agentId } });
   });
 

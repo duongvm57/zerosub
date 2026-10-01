@@ -63,10 +63,7 @@ export interface RouteInput {
   now: number;
   autoSwitch: boolean;
   balanceNewAgents: boolean;
-  /**
-   * Whether an existing conversation can open on a different account. When it can't (Codex), a
-   * thread stays on the account it started on, and only brand-new agents are balanced or rerouted.
-   */
+  /** Whether an existing conversation can open on a different account. */
   portable: boolean;
   usageOf(accountId: string): Usage | null | undefined;
 }
@@ -92,7 +89,10 @@ export function chooseAccount(state: StoredState, input: RouteInput): RouteDecis
   const at = new Date(input.now).toISOString();
   const fresh = input.reason === "create";
 
-  const binding = state.bindings[input.agentId];
+  const savedBinding = state.bindings[input.agentId];
+  // Older ZeroSub versions used `thread` to pin Codex conversations. Once an adapter is portable,
+  // that legacy pin must not defeat the default or an automatic switch.
+  const binding = input.portable && savedBinding?.source === "thread" ? undefined : savedBinding;
   const bound = findAccount(state, binding?.accountId);
   let account = bound && bound.family === input.family ? bound : undefined;
   let bind: Binding | null = null;
@@ -102,10 +102,10 @@ export function chooseAccount(state: StoredState, input: RouteInput): RouteDecis
     if (account) bind = { accountId: account.id, source: "balance", at };
   }
   if (!account) {
-    // An imported Codex thread most likely came from the user's own CLI, so it belongs to that login.
+    // An imported non-portable thread most likely came from the user's own CLI, so it belongs to that login.
     const imported = !input.portable && input.reason === "import" ? mainAccount(state, input.family) : undefined;
     account = imported ?? defaultAccount(state, input.family);
-    // A thread that can't move is pinned to the account it first opened on.
+    // A non-portable thread is pinned to the account it first opened on.
     if (account && !input.portable) bind = { accountId: account.id, source: "thread", at };
   }
   if (!account) return null;
@@ -118,8 +118,8 @@ export function chooseAccount(state: StoredState, input: RouteInput): RouteDecis
     if (alternative) {
       skipped = { account, why };
       account = alternative;
-      // A thread that can't move lives where it starts. Otherwise a disabled account keeps its
-      // agents' bindings, so they return when it's enabled again; a limit re-pins them.
+      // A non-portable thread lives where it starts. Otherwise a disabled account keeps its
+      // agents' bindings, so they return when it's enabled again; a limit follows the alternative.
       bind =
         !input.portable
           ? { accountId: alternative.id, source: "thread", at }

@@ -264,7 +264,7 @@ function AccountCard({
       const message = describeReopen(`${account.label} is ${enabling ? "enabled" : "disabled"}`, result);
       const stayed =
         result.stayed > 0
-          ? ` · ${result.stayed} ChatGPT conversation${result.stayed === 1 ? " stays" : "s stay"} on it (they can't change accounts)`
+          ? ` · ${result.stayed} conversation${result.stayed === 1 ? " stays" : "s stay"} on it (the provider cannot reopen them)`
           : "";
       toast.show(`${message}${stayed}`, { variant: "success", durationMs: 5_000 });
     } catch (error) {
@@ -487,7 +487,7 @@ function AccountCard({
           <Text style={text.body}>
             {account.family === "claude"
               ? "This signs the account out on this machine and deletes its saved login. Agents using it move to the default account; their conversations are kept."
-              : "This signs the account out on this machine and deletes its saved login. New agents use the default account. Existing ChatGPT conversations on it can't move, so start new agents for them."}
+              : "This signs the account out on this machine and deletes its saved login. Agents using it move to the default account when the provider can reopen them; otherwise continue them elsewhere first."}
           </Text>
           <View style={{ flexDirection: "row", gap: 8, justifyContent: "flex-end" }}>
             <Button theme={theme} label="Cancel" tooltip="Keep this account" tooltipAlign="end" onPress={() => setConfirmRemove(false)} />
@@ -664,7 +664,10 @@ export function describeReopen(prefix: string, summary: ReopenSummary): string {
   if (summary.continuedIn) parts.push(`continuing in “${summary.continuedIn.title}”`);
   if (summary.reopened.length > 0) parts.push(`${summary.reopened.length} agent(s) switched`);
   if (summary.deferred.length > 0) parts.push(`${summary.deferred.length} will switch after their current turn`);
-  if (summary.failed.length > 0) parts.push(`${summary.failed.length} will switch on their next restart`);
+  if (summary.failed.length > 0) {
+    const reason = summary.failed[0]?.error;
+    parts.push(`${summary.failed.length} will switch on their next session${reason ? ` (${reason})` : ""}`);
+  }
   return parts.join(" · ");
 }
 
@@ -673,4 +676,3 @@ function chunk<T>(items: T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size) rows.push(items.slice(i, i + size));
   return rows;
 }
-

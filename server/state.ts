@@ -34,7 +34,7 @@ export const BindingSchema = z.object({
   accountId: z.string(),
   /**
    * `user`: chosen in the UI. `auto`: moved after a limit. `balance`: spread at creation.
-   * `thread`: a conversation that can't change accounts, pinned where it started.
+   * `thread`: a legacy or non-portable conversation pinned where it started.
    */
   source: z.enum(["user", "auto", "balance", "thread"]),
   at: z.string(),
@@ -69,7 +69,7 @@ export function emptyState(): StoredState {
 
 /**
  * Keeps every entry that still validates, so one bad record (say, after a downgrade) can't wipe
- * the accounts and every Codex thread's pin. Reports whether anything had to be dropped.
+ * the accounts and every saved conversation binding. Reports whether anything had to be dropped.
  */
 export function salvageState(raw: unknown): { state: StoredState; dropped: boolean } {
   const whole = StoredStateSchema.safeParse(raw);

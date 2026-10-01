@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Usage } from "../shared/model";
 import { applyEnv } from "./adapter";
+import { CodexAdapter } from "./codex";
 import { chooseAccount, mostAvailable } from "./routing";
 import { emptyState, type StoredAccount, type StoredState } from "./state";
 
@@ -135,6 +136,12 @@ describe("chooseAccount", () => {
   });
 });
 
+describe("Codex account routing", () => {
+  it("marks Codex sessions portable so an existing thread can reload on another account", () => {
+    expect(new CodexAdapter().portable).toBe(true);
+  });
+});
+
 describe("mostAvailable", () => {
   it("breaks ties toward the default account", () => {
     const main = account({ id: "claude-main", kind: "main", home: null });
@@ -150,30 +157,45 @@ describe("mostAvailable", () => {
   });
 });
 
-describe("non-portable conversations (Codex)", () => {
+describe("portable conversations (Codex)", () => {
   const main = account({ id: "codex-main", family: "codex", kind: "main", home: null });
   const work = account({ id: "codex-work", family: "codex" });
-  const codex = { ...base, family: "codex" as const, portable: false };
+  const codex = { ...base, family: "codex" as const, portable: true };
 
-  it("pins a thread to the account it first opens on", () => {
+  it("does not pin a resumed thread when it is already on the default account", () => {
     const decision = chooseAccount(stateWith([main, work]), { ...codex, reason: "resume", usageOf: () => null });
     expect(decision?.account.id).toBe("codex-main");
-    expect(decision?.bind).toMatchObject({ accountId: "codex-main", source: "thread" });
+    expect(decision?.bind).toBeNull();
   });
 
-  it("keeps an existing thread on its exhausted account instead of breaking it", () => {
+  it("does not let a legacy thread pin defeat a changed default", () => {
+    const state = stateWith([main, work], {
+      defaults: { claude: null, codex: "codex-work" },
+      bindings: { "agent-1": { accountId: "codex-main", source: "thread", at: "x" } },
+    });
+    expect(chooseAccount(state, { ...codex, reason: "resume", usageOf: () => null })).toMatchObject({
+      account: { id: "codex-work" },
+      bind: null,
+    });
+  });
+
+  it("moves an existing thread off its exhausted account", () => {
     const limited = account({ id: "codex-main", family: "codex", kind: "main", home: null, limitedUntil: "2026-09-23T14:00:00Z" });
     const state = stateWith([limited, work], {
       bindings: { "agent-1": { accountId: "codex-main", source: "thread", at: "x" } },
     });
-    expect(chooseAccount(state, { ...codex, reason: "resume", usageOf: () => null })?.account.id).toBe("codex-main");
+    expect(chooseAccount(state, { ...codex, reason: "resume", usageOf: () => null })).toMatchObject({
+      account: { id: "codex-work" },
+      bind: { accountId: "codex-work", source: "auto" },
+      skipped: { account: { id: "codex-main" }, why: "limited" },
+    });
   });
 
-  it("starts new agents on a usable account", () => {
+  it("starts new agents on a usable account and records the automatic move", () => {
     const limited = account({ id: "codex-main", family: "codex", kind: "main", home: null, limitedUntil: "2026-09-23T14:00:00Z" });
     const decision = chooseAccount(stateWith([limited, work]), { ...codex, reason: "create", usageOf: () => null });
     expect(decision?.account.id).toBe("codex-work");
-    expect(decision?.bind).toMatchObject({ accountId: "codex-work", source: "thread" });
+    expect(decision?.bind).toMatchObject({ accountId: "codex-work", source: "auto" });
   });
 });
 
@@ -208,28 +230,29 @@ describe("disabled accounts", () => {
     expect(decision?.bind).toBeNull();
   });
 
-  it("pins a new ChatGPT thread where it actually starts", () => {
+  it("routes a new ChatGPT agent around a disabled default", () => {
     const codexMain = account({ id: "codex-main", family: "codex", kind: "main", home: null, ...off });
     const codexWork = account({ id: "codex-work", family: "codex" });
     const decision = chooseAccount(stateWith([codexMain, codexWork]), {
       ...base,
       family: "codex",
-      portable: false,
+      portable: true,
       reason: "create",
       usageOf: () => null,
     });
     expect(decision?.account.id).toBe("codex-work");
-    expect(decision?.bind).toMatchObject({ accountId: "codex-work", source: "thread" });
+    expect(decision?.bind).toBeNull();
   });
 
-  it("leaves an existing ChatGPT thread on its disabled account, since it can't move", () => {
+  it("moves an existing ChatGPT thread off a disabled account", () => {
     const codexMain = account({ id: "codex-main", family: "codex", kind: "main", home: null });
     const codexWork = account({ id: "codex-work", family: "codex", ...off });
     const state = stateWith([codexMain, codexWork], {
       bindings: { "agent-1": { accountId: "codex-work", source: "thread", at: "2026-09-23T00:00:00Z" } },
     });
-    const decision = chooseAccount(state, { ...base, family: "codex", portable: false, reason: "resume", usageOf: () => null });
-    expect(decision?.account.id).toBe("codex-work");
+    const decision = chooseAccount(state, { ...base, family: "codex", portable: true, reason: "resume", usageOf: () => null });
+    expect(decision?.account.id).toBe("codex-main");
+    expect(decision?.bind).toBeNull();
   });
 
   it("is never the most available account", () => {

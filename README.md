@@ -41,7 +41,7 @@ Then open **Accounts (ZeroSub)** in the sidebar.
    - **The account button in an agent's message box**: moves that one agent.
    - **`/account work`** in the message box, or `/account default` to follow the default again.
    - **⌘K → "Make … the default"**.
-   - **Disable for now** (the pause button on a card): the account stays signed in but ZeroSub stops using it. Its agents move to your other accounts right away (busy ones after their turn) and come back when you press **Enable**. ChatGPT conversations already on it stay, since they can't change accounts. You can't disable the last usable account of a provider.
+   - **Disable for now** (the pause button on a card): the account stays signed in but ZeroSub stops using it. Its agents move to your other accounts right away (busy ones after their turn) and come back when you press **Enable**. A provider that cannot reopen an existing conversation may leave it pending until its next session. You can't disable the last usable account of a provider.
 4. Leave **Automatic switching** on (in Accounts, or **Settings → Plugins → zerosub → ZeroSub preferences**) and limits take care of themselves:
    - Only the CLIs' own limit notices trigger a switch. That covers Claude Code's "You've hit your session limit · resets 3pm" and Codex's "You’ve hit your usage limit…".
    - A short note in the agent's timeline says what happened.
@@ -51,7 +51,7 @@ Then open **Accounts (ZeroSub)** in the sidebar.
 ### Claude vs. ChatGPT when switching mid-conversation
 
 - **Claude:** a conversation moves to another account in place. The agent reopens on the new account with its full history and continues.
-- **ChatGPT (Codex):** Codex encrypts its reasoning per ChatGPT account, so another account can't read an existing thread. The thread stays on its account. When it hits a limit, or you pick another account for it, ZeroSub starts a **continuation agent** on the other account. It goes in the same workspace and gets a transcript of the conversation so far, so the work keeps going. New Codex agents simply start on the chosen account.
+- **ChatGPT (Codex):** an existing conversation switches accounts in the same Paseo agent. ZeroSub prepares the selected `CODEX_HOME`, keeps `sessions` and the shared `CODEX_SQLITE_HOME`, then reloads the agent so Codex resumes the same rollout. A limit or a manual choice therefore keeps the same agent and history; it never creates a Codex→Codex continuation agent. If Paseo cannot reload the session, the binding is recorded for the next session and the timeline explains the failure. Claude↔Codex continuation remains an explicit new-agent fork.
 
 ### Banked resets
 
@@ -108,7 +108,7 @@ ZeroSub never implements OAuth itself and never copies credentials between accou
 - To show Claude usage, ZeroSub reads each account's current access token and calls Anthropic's usage endpoint, the same way Paseo's built-in usage display and `/usage` do. It never logs or stores tokens and never refreshes them itself. When you refresh usage (the ↻ button beside the title) or use a reset and a token has expired, it runs `claude -p /usage` so Claude Code renews its own sign-in. Codex usage comes from `codex app-server`.
 - Using a banked reset calls the provider's own reset endpoint with that account's sign-in, and only after you confirm (or turn on automatic use).
 - Removing an account moves its agents to the default account, then signs it out (`claude auth logout` / `codex` logout) and deletes its home. This happens once no agent is mid-turn on it. Abandoned sign-ins are cleaned up the same way.
-- An account that still has ChatGPT conversations on it can't be removed until you archive them or continue them elsewhere, because they can't move.
+- Removing an account moves its agents to the default account when their provider can reopen the session; if a provider cannot, continue those conversations elsewhere first.
 - Your CLI login can't be removed from ZeroSub.
 
 ## Limitations
@@ -116,7 +116,7 @@ ZeroSub never implements OAuth itself and never copies credentials between accou
 - **MCP servers that use OAuth** (Linear, Notion, …) store their tokens per Claude account, so sign in to them once on each account.
 - **Shared settings apply to every account.** If `~/.claude/settings.json` sets an `apiKeyHelper` or API-key `env`, every account uses that key instead of its subscription.
 - **Usage for an idle Claude account** shows the last reading until the account is used again or you refresh usage. Anthropic rate-limits its usage endpoint (Claude Code and Paseo read it too), so a reading can be a few minutes old; the card then says when it was taken. Readings are saved in `$PASEO_HOME/zerosub/usage.json`, so they survive restarts.
-- **Password-protected daemons:** `paseo agent reload` can't authenticate. Agents then switch the next time their session starts, not immediately, and their timeline note says so.
+- **Password-protected daemons:** `paseo agent reload` can't authenticate. Agents then switch the next time their session starts, not immediately, and their timeline note includes the reload failure.
 - **Imported Codex threads** (`paseo agent import`) are assigned to your CLI login, since that's where standalone Codex sessions come from.
 - **ChatGPT device-code sign-in** has to be enabled in ChatGPT → Settings → Security. The browser option works from a browser on the host's own computer.
 - Tested on macOS with Claude Code 2.1.280, Codex 0.156.1 and Paseo 0.9.1. Linux should work. Windows is untested.

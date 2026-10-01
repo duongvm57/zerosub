@@ -107,14 +107,14 @@ interface AgentInfo {
   provider: string;
   status: string;
   archived: boolean;
-  /** The conversation has started (so a Codex thread already holds account-bound reasoning). */
+  /** The conversation has started and has a live provider session. */
   hasHistory: boolean;
   title: string | null;
   /** The agent this one carries on from, when ZeroSub started it as a continuation. */
   continuedFrom: string | null;
 }
 
-type ReopenOutcome = "reopened" | "deferred" | "closed" | "failed";
+type ReopenOutcome = "reopened" | "deferred" | "closed" | { kind: "failed"; error: string };
 type Problem = { kind: "limit"; hit: LimitHit } | { kind: "signed_out" };
 
 /** The agent has a running CLI session (idle between turns counts). */
@@ -443,6 +443,9 @@ export class Service {
     if (!current || this.targetFor(state, agentId, family) === current) return; // Switched back meanwhile.
     const outcome = await this.reopenAgent(paseo, agentId, row, true);
     if (outcome === "reopened" && row) await this.appendRow(paseo, agentId, await this.landed(row, agentId));
+    else if (typeof outcome === "object" && row) {
+      await this.appendRow(paseo, agentId, { ...row, outcome: "pending", detail: `Couldn't reload the session: ${outcome.error}` });
+    }
   }
 
   // ------------------------------------------------------------------ limits and failover
@@ -629,8 +632,16 @@ export class Service {
       this.switchGuard.note(agentId, now);
       const outcome = await this.reopenAgent(paseo, agentId, null, true);
       const continued = outcome === "reopened" && this.prefs.autoContinue;
+      const reloadError = typeof outcome === "object" ? outcome.error : null;
       const row = await this.landed(
-        { ...base, to: next.label, reason, continued, outcome: outcome === "reopened" ? "switched" : "pending" },
+        {
+          ...base,
+          to: next.label,
+          reason,
+          continued,
+          outcome: outcome === "reopened" ? "switched" : "pending",
+          detail: reloadError ? `Couldn't reload the session: ${reloadError}` : null,
+        },
         agentId,
       );
       await this.appendRow(paseo, agentId, row);
@@ -643,7 +654,7 @@ export class Service {
       return;
     }
 
-    // A ChatGPT thread can't move to another account; carry the work on in a new agent there.
+    // A non-portable provider cannot move its thread; carry the work on in a new agent there.
     if (!this.prefs.autoContinue) {
       await this.appendRow(paseo, agentId, {
         ...base,
@@ -1063,7 +1074,7 @@ export class Service {
           else delete draft.sessions[agentId];
         });
       }
-      return "failed";
+      return { kind: "failed", error: result.error };
     }
     return "reopened";
   }
@@ -1106,7 +1117,10 @@ export class Service {
         summary.reopened.push(agentId);
         await this.appendRow(paseo, agentId, await this.landed(row, agentId));
       } else if (outcome === "deferred") summary.deferred.push(agentId);
-      else if (outcome === "failed") summary.failed.push({ agentId, error: "Reload failed" });
+      else if (typeof outcome === "object") {
+        summary.failed.push({ agentId, error: outcome.error });
+        await this.appendRow(paseo, agentId, { ...row, outcome: "pending", detail: `Couldn't reload the session: ${outcome.error}` });
+      }
     }
     return summary;
   }
@@ -1307,15 +1321,15 @@ export class Service {
     await this.store.update((draft) => {
       draft.defaults[account.family] = account.id;
     });
-    // Conversations that can't move (Codex threads) are pinned, so this only moves portable ones.
+    // Portable conversations reopen in place; non-portable adapters keep their existing pins.
     return this.reconcile(paseo, "default");
   }
 
   /**
    * Sets an account aside for a while, or brings it back. A disabled account stays signed in, but
    * nothing is routed to it: its agents move to the next account now (busy ones after their turn)
-   * and return when it's enabled again. ChatGPT conversations can't change accounts, so the ones
-   * already on it stay there; `stayed` counts them.
+   * and return when it's enabled again. Non-portable conversations may stay on the disabled account;
+   * `stayed` counts them.
    */
   async setAccountEnabled(paseo: PaseoApi, accountId: string, enabled: boolean): Promise<ReopenSummary & { stayed: number }> {
     this.attach(paseo);
@@ -1449,7 +1463,7 @@ export class Service {
       throw new Error("Your CLI login can't be removed here. Sign out with `claude auth logout` or `codex logout` instead.");
     }
     if (!this.adapters[account.family].portable) {
-      // These conversations can't move to another ChatGPT account, so removing theirs would strand them.
+      // A non-portable provider cannot move these conversations, so removing theirs would strand them.
       const families = await this.families.resolve(paseo);
       const stranded = (await listAgents(paseo, false)).agents.filter(
         (agent) =>
@@ -1460,7 +1474,7 @@ export class Service {
       if (stranded.length > 0) {
         const one = stranded.length === 1;
         throw new Error(
-          `${stranded.length} ChatGPT conversation${one ? "" : "s"} still ${one ? "runs" : "run"} on ${account.label} and can't move to another account. Archive ${
+          `${stranded.length} conversation${one ? "" : "s"} still ${one ? "runs" : "run"} on ${account.label} and can't move to another account. Archive ${
             one ? "it" : "them"
           } (the work stays in your files) or continue ${one ? "it" : "them"} on another account from the account button, then remove ${account.label}.`,
         );

@@ -159,8 +159,8 @@ interface Snapshot {
 
 export class CodexAdapter implements FamilyAdapter {
   readonly family = "codex" as const;
-  /** ChatGPT accounts can't decrypt each other's reasoning, so threads stay on their account. */
-  readonly portable = false;
+  /** Codex reloads the same rollout from the shared session/SQLite store under the selected home. */
+  readonly portable = true;
   readonly usageSpacingMs = 20_000;
   private readonly snapshots = new Map<string, { at: number; value: Promise<Snapshot> }>();
 

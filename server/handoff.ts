@@ -115,9 +115,8 @@ export interface ContinuationTarget {
 
 /**
  * Starts a new agent in the same workspace, pre-bound to another account, and hands it the
- * conversation so far. Used where a thread cannot move between accounts (Codex encrypts its
- * reasoning per ChatGPT account, so the old thread would be rejected by the new one), and to carry
- * work over to the other provider when every account of one is out.
+ * conversation so far. Used for an explicit cross-provider continuation, or as a fallback for a
+ * provider whose adapter says an existing thread cannot move between accounts.
  */
 export async function continueInNewAgent(options: {
   paseo: PaseoApi;

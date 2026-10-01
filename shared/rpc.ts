@@ -107,7 +107,7 @@ export const setAccountEnabled = defineRpc({
   name: "zerosub.accounts.enabled",
   input: z.object({ accountId: z.string(), enabled: z.boolean() }),
   output: ReopenSummarySchema.extend({
-    /** ChatGPT conversations that stay on the disabled account because they can't change accounts. */
+    /** Existing conversations that stay on the disabled account because the provider cannot reopen them. */
     stayed: z.number(),
   }),
 });
