@@ -1180,6 +1180,7 @@ export class Service {
     // Sessions ZeroSub never routed still ran on the CLI login: that's the account to restore to.
     const fromId = family ? (before?.accountId ?? mainAccount(stateBefore, family)?.id) : undefined;
     const result = await this.reopener.reopen(agentId);
+    if (result.ok && result.detail) console.warn(`[ZeroSub] reopened ${agentId} after fallback: ${result.detail}`);
     if (!result.ok) {
       console.warn(`[ZeroSub] could not reopen ${agentId}: ${result.error}`);
       // Paseo asks for the new session's environment before it closes the old one, so a failed reload
