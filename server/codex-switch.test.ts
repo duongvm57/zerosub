@@ -62,6 +62,10 @@ function account(id: string, label: string, home: string | null) {
 interface HarnessOptions {
   reload?: "works" | "fails";
   limit?: boolean;
+  status?: string;
+  archived?: boolean;
+  /** The session was recorded on an account that is no longer registered. */
+  staleSession?: boolean;
 }
 
 async function harness(options: HarnessOptions = {}) {
@@ -70,14 +74,14 @@ async function harness(options: HarnessOptions = {}) {
     state.accounts = [account(MAIN, "personal", null), account(WORK, "work", join(root, "codex-work"))];
     state.defaults = { claude: null, codex: MAIN };
     state.bindings = { [AGENT]: { accountId: MAIN, source: "thread", at: new Date().toISOString() } };
-    state.sessions = { [AGENT]: { accountId: MAIN, family: "codex", openedAt: "2026-09-23T07:00:00.000Z" } };
+    state.sessions = { [AGENT]: { accountId: options.staleSession ? "codex-removed" : MAIN, family: "codex", openedAt: "2026-09-23T07:00:00.000Z" } };
   });
 
   const agent = {
     id: AGENT,
     provider: "codex",
-    status: "idle",
-    archivedAt: null,
+    status: options.status ?? "idle",
+    archivedAt: options.archived ? "2026-09-23T08:00:00.000Z" : null,
     lastUserMessageAt: "2026-09-23T07:00:00.000Z",
   };
   const notes: Array<Record<string, unknown>> = [];
@@ -195,6 +199,72 @@ describe("Codex same-session account switching", () => {
     expect(state.bindings[AGENT]?.accountId).toBe(WORK);
     expect(state.sessions[AGENT]?.accountId).toBe(MAIN);
     expect(notes.at(-1)).toMatchObject({ from: "personal", to: "work", outcome: "pending" });
+  });
+});
+
+describe("applying an account change by agent state", () => {
+  it("reopens an errored agent whose session is on a removed account", async () => {
+    const { service, store, paseo, reloads } = await harness({ status: "error", staleSession: true });
+
+    const summary = await service.setAgentAccount(paseo as never, AGENT, WORK);
+
+    expect(summary).toEqual({ reopened: [AGENT], deferred: [], failed: [], continuedIn: null });
+    expect(reloads).toEqual([AGENT]);
+    expect((await store.read()).sessions[AGENT]?.accountId).toBe(WORK);
+  });
+
+  it("reopens an errored agent onto the selected account", async () => {
+    const { service, store, paseo, reloads, notes } = await harness({ status: "error" });
+
+    const summary = await service.setAgentAccount(paseo as never, AGENT, WORK);
+
+    expect(summary).toEqual({ reopened: [AGENT], deferred: [], failed: [], continuedIn: null });
+    expect(reloads).toEqual([AGENT]);
+    expect((await store.read()).sessions[AGENT]?.accountId).toBe(WORK);
+    expect(notes.at(-1)).toMatchObject({ outcome: "switched" });
+  });
+
+  it("keeps the binding and old session when an errored agent's reload fails", async () => {
+    const { service, store, paseo, reloads, notes } = await harness({ status: "error", reload: "fails" });
+
+    const summary = await service.setAgentAccount(paseo as never, AGENT, WORK);
+    const state = await store.read();
+
+    expect(reloads).toEqual([AGENT]);
+    expect(summary).toMatchObject({ reopened: [], deferred: [], failed: [{ agentId: AGENT }] });
+    expect(state.bindings[AGENT]?.accountId).toBe(WORK);
+    expect(state.sessions[AGENT]?.accountId).toBe(MAIN);
+    expect(notes.at(-1)).toMatchObject({ outcome: "pending" });
+  });
+
+  it("never reloads an archived agent, even one in error", async () => {
+    const { service, store, paseo, reloads } = await harness({ status: "error", archived: true });
+
+    const summary = await service.setAgentAccount(paseo as never, AGENT, WORK);
+
+    expect(summary).toEqual({ reopened: [], deferred: [], failed: [], continuedIn: null });
+    expect(reloads).toEqual([]);
+    expect((await store.read()).bindings[AGENT]?.accountId).toBe(WORK);
+    expect((await store.read()).sessions[AGENT]?.accountId).toBe(MAIN);
+  });
+
+  it("leaves a closed agent to route itself when it next opens", async () => {
+    const { service, store, paseo, reloads } = await harness({ status: "closed" });
+
+    const summary = await service.setAgentAccount(paseo as never, AGENT, WORK);
+
+    expect(summary).toEqual({ reopened: [], deferred: [], failed: [], continuedIn: null });
+    expect(reloads).toEqual([]);
+    expect((await store.read()).bindings[AGENT]?.accountId).toBe(WORK);
+  });
+
+  it("defers a running agent until its turn ends", async () => {
+    const { service, paseo, reloads } = await harness({ status: "running" });
+
+    const summary = await service.setAgentAccount(paseo as never, AGENT, WORK);
+
+    expect(summary).toEqual({ reopened: [], deferred: [AGENT], failed: [], continuedIn: null });
+    expect(reloads).toEqual([]);
   });
 });
 

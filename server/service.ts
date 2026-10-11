@@ -1388,12 +1388,16 @@ export class Service {
     };
   }
 
-  /** Agents with a live session: the given ones (looked up fresh), or every one. */
+  /**
+   * Agents with a live session: the given ones (looked up fresh), or every one. Explicitly named
+   * agents may also be errored: their session is dead, but the user asked for it to move accounts
+   * (a reload is what recovers it). Archived agents are never included.
+   */
   private async liveAgents(paseo: PaseoApi, agentIds?: readonly string[]): Promise<AgentInfo[]> {
     const agents = agentIds
       ? (await Promise.all(agentIds.map((agentId) => agentInfo(paseo, agentId)))).filter((agent): agent is AgentInfo => agent !== null)
       : await this.cachedAgents(paseo);
-    return agents.filter((agent) => !agent.archived && isLive(agent.status));
+    return agents.filter((agent) => !agent.archived && (isLive(agent.status) || (agentIds !== undefined && agent.status === "error")));
   }
 
   private cachedAgents(paseo: PaseoApi): Promise<AgentInfo[]> {
