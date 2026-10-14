@@ -8,13 +8,17 @@ import {
 } from "@getpaseo/plugin/client/ui";
 import { useState } from "react";
 import { Text } from "react-native";
+import { FAMILY_LABEL } from "../shared/model";
 import { DEFAULT_CONTINUE_PROMPT, preferences, type Preferences } from "../shared/preferences";
+import { useStore, type ZeroSubStore } from "./store";
 
 /** Settings → Plugins → zerosub. Accounts themselves live in the sidebar surface. */
-export function PreferencesScreen({ theme, host, onOpenAccounts }: PluginSurfaceProps & { onOpenAccounts(): void }) {
+export function PreferencesScreen({ theme, host, store, onOpenAccounts }: PluginSurfaceProps & { store: ZeroSubStore; onOpenAccounts(): void }) {
   const settings = useSettings(preferences);
+  const { state, error } = useStore(store);
   const multiHost = useHosts().length > 1;
   const [prompt, setPrompt] = useState<string | null>(null);
+  const [pingModels, setPingModels] = useState<Partial<Pick<Preferences, "claudePingModel" | "codexPingModel">>>({});
   const muted = { color: theme.colors.foregroundMuted };
   if (settings.status === "loading") return <Text style={muted}>Loading…</Text>;
   if (settings.status !== "ready") {
@@ -42,6 +46,50 @@ export function PreferencesScreen({ theme, host, onOpenAccounts }: PluginSurface
             actionLabel="Open accounts"
             onPress={onOpenAccounts}
           />
+        </SettingsCard>
+      </SettingsSection>
+      <SettingsSection title="Start quota windows">
+        <SettingsCard>
+          <SettingsSwitch
+            label="Ping idle accounts automatically"
+            hint="Sends “Reply OK.” when a selected account's five-hour window is idle. Uses a small amount of quota. Off by default; no accounts are selected initially."
+            value={settings.values.autoPing}
+            disabled={settings.saving}
+            onValueChange={(autoPing) => save({ autoPing })}
+          />
+          {(["claudePingModel", "codexPingModel"] as const).map((key) => (
+            <SettingsInput
+              key={key}
+              label={key === "claudePingModel" ? "Claude ping model" : "ChatGPT ping model"}
+              initialValue={settings.values[key]}
+              onChangeText={(value) => setPingModels((current) => ({ ...current, [key]: value }))}
+              disabled={settings.saving}
+            />
+          ))}
+          <SettingsAction
+            label="Save ping models"
+            actionLabel="Save"
+            disabled={settings.saving || Object.keys(pingModels).length === 0 ||
+              Object.values(pingModels).some((model) => !model.trim() || model.trim().length > 200)}
+            onPress={() => {
+              const patch = Object.fromEntries(Object.entries(pingModels).map(([key, model]) => [key, model.trim()]));
+              save(patch);
+            }}
+          />
+          <Text style={muted}>Choose accounts on {host.label}. Disabled or signed-out accounts are skipped.</Text>
+          {state ? state.accounts.map((account) => (
+            <SettingsSwitch
+              key={account.id}
+              label={`${FAMILY_LABEL[account.family]} · ${account.label}`}
+              hint={account.email ?? undefined}
+              value={settings.values.pingAccountIds.includes(account.id)}
+              disabled={settings.saving}
+              onValueChange={(selected) => save({ pingAccountIds: selected
+                ? [...new Set([...settings.values.pingAccountIds, account.id])]
+                : settings.values.pingAccountIds.filter((id) => id !== account.id) })}
+            />
+          )) : <Text style={muted}>{error ?? "Loading accounts…"}</Text>}
+          {state?.accounts.length === 0 ? <Text style={muted}>Add an account to select it for pings.</Text> : null}
         </SettingsCard>
       </SettingsSection>
       <SettingsSection title="Automatic switching">

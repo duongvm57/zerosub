@@ -14,6 +14,7 @@ import { providerCommand } from "./binaries";
 import { codexSqliteHome, prepareCodexHome } from "./homes";
 import { detectCodexLimit, detectCodexResumeFailure, detectCodexSignOut } from "./limits";
 import { run } from "./process";
+import { sendQuotaPing } from "./ping";
 
 /** The originator Codex's own CLI logs in with; the sign-in service knows it. */
 const CLIENT_NAME = "codex_cli_rs";
@@ -183,6 +184,14 @@ export class CodexAdapter implements FamilyAdapter {
 
   prepareHome(home: string): Promise<void> {
     return prepareCodexHome(home);
+  }
+
+  async ping(home: string | null, model: string): Promise<void> {
+    try {
+      await sendQuotaPing(this.family, spawnEnv(await this.env(home)), model);
+    } finally {
+      this.snapshots.delete(home ?? "");
+    }
   }
 
   async identity(home: string | null): Promise<Identity> {

@@ -91,6 +91,8 @@ export interface FamilyAdapter {
    * sign-in first (slow, so only for explicit requests, never background polls).
    */
   usage(home: string | null, options?: { renewLogin?: boolean }): Promise<UsageRead>;
+  /** One minimal subscription-backed turn, separate from the user's conversations. */
+  ping?(home: string | null, model: string): Promise<void>;
   /** Spends one banked reset. Only called for an explicit user request or the opt-in auto setting. */
   /**
    * Spends one banked reset. With `onlyAtLimit` (automatic use) it spends one only while the

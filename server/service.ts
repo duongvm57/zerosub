@@ -16,7 +16,7 @@ import {
   type StateView,
   type Usage,
 } from "../shared/model";
-import { DEFAULT_CONTINUE_PROMPT, type Preferences } from "../shared/preferences";
+import { DEFAULT_CONTINUE_PROMPT, DEFAULT_PING_MODELS, type Preferences } from "../shared/preferences";
 import type { RedeemResult, ReopenSummary } from "../shared/rpc";
 import { SWITCH_ROW_KIND, SWITCH_ROW_VERSION, type SwitchRow } from "../shared/timeline";
 import {
@@ -38,6 +38,7 @@ import { canSignInWithBrowser } from "./machine";
 import { equivalentMode } from "./modes";
 import { homesDir } from "./paths";
 import { Reopener } from "./reopen";
+import { hasIdleQuotaWindow, QUOTA_PING_INTERVAL_MS } from "./ping";
 import { SwitchGuard } from "./switch-guard";
 import { loadReadings, mergeUsage, saveReadings, showLimit } from "./usage";
 import { chooseAccount, isLimited, mostAvailable } from "./routing";
@@ -88,6 +89,10 @@ const DEFAULT_PREFERENCES: Preferences = {
   showComposerPill: true,
   autoRedeem: false,
   forkOtherProvider: false,
+  autoPing: false,
+  pingAccountIds: [],
+  claudePingModel: DEFAULT_PING_MODELS.claude,
+  codexPingModel: DEFAULT_PING_MODELS.codex,
 };
 
 interface LoginSession {
@@ -146,6 +151,7 @@ export class Service {
   private readonly usage = new Map<string, Usage>();
   private readonly usageAttemptAt = new Map<string, number>();
   private readonly usageInFlight = new Map<string, Promise<void>>();
+  private readonly pingsInFlight = new Map<string, Promise<void>>();
   private readonly identityCheckedAt = new Map<string, number>();
   private readonly availability = new Map<Family, { ok: boolean; detail: string | null; at: number }>();
   private readonly logins = new Map<string, LoginSession>();
@@ -208,6 +214,7 @@ export class Service {
       await saveReadings(this.usage).catch(() => undefined);
     }
     for (const login of this.logins.values()) login.handle?.cancel();
+    await Promise.allSettled(this.pingsInFlight.values());
   }
 
   // ------------------------------------------------------------------ upkeep
@@ -246,7 +253,8 @@ export class Service {
       const attempted = this.usageAttemptAt.get(account.id) ?? 0;
       const busy = now - (this.activeAt.get(account.id) ?? 0) < ACTIVE_WINDOW_MS;
       const isDefault = defaultAccount(state, account.family)?.id === account.id;
-      const every = account.disabled ? USAGE_IDLE_MS : busy ? USAGE_BUSY_MS : isDefault ? USAGE_DEFAULT_MS : USAGE_IDLE_MS;
+      const pingSelected = this.prefs.autoPing && this.prefs.pingAccountIds.includes(account.id);
+      const every = account.disabled ? USAGE_IDLE_MS : busy || pingSelected ? USAGE_BUSY_MS : isDefault ? USAGE_DEFAULT_MS : USAGE_IDLE_MS;
       if (account.signedIn && now - attempted > every) {
         void this.refreshUsage(account.id).catch((error: unknown) => log(`usage refresh for ${account.label} failed`, error));
       }
@@ -1306,9 +1314,47 @@ export class Service {
           target.limitKind = null;
         });
       }
+      this.maybePing(account, usage);
     })().finally(() => this.usageInFlight.delete(accountId));
     this.usageInFlight.set(accountId, task);
     return task;
+  }
+
+  /** Only fresh successful usage reads can start an automatic ping. Never involves failover. */
+  private maybePing(account: StoredAccount, usage: Usage): void {
+    const accountId = account.id;
+    if (this.stopped || !this.prefs.autoPing || !this.prefs.pingAccountIds.includes(accountId) || this.pingsInFlight.has(accountId)) return;
+    if (!hasIdleQuotaWindow(account.family, usage) || !account.signedIn || account.disabled) return;
+    if (account.lastQuotaPingAt && Date.now() - Date.parse(account.lastQuotaPingAt) < QUOTA_PING_INTERVAL_MS) return;
+    const task = (async () => {
+      let selected: StoredAccount | undefined;
+      // Claim the attempt atomically before launching; concurrent reads and restarts cannot repeat it.
+      await this.store.update((draft) => {
+        const account = findAccount(draft, accountId);
+        const now = Date.now();
+        if (!account || !account.signedIn || account.disabled || isLimited(account, now)) return;
+        if (this.stopped || !this.prefs.autoPing || !this.prefs.pingAccountIds.includes(accountId)) return;
+        if (!this.adapters[account.family].ping || !hasIdleQuotaWindow(account.family, usage, now)) return;
+        if (now - (this.activeAt.get(accountId) ?? 0) < USAGE_BUSY_MS) return;
+        const last = account.lastQuotaPingAt ? Date.parse(account.lastQuotaPingAt) : 0;
+        if (now - last < QUOTA_PING_INTERVAL_MS) return;
+        account.lastQuotaPingAt = new Date(now).toISOString();
+        selected = { ...account };
+      });
+      if (!selected || this.stopped) return;
+      const account = selected;
+      const adapter = this.adapters[account.family];
+      if (account.home) await adapter.prepareHome(account.home);
+      if (this.stopped || !this.prefs.autoPing || !this.prefs.pingAccountIds.includes(accountId)) return;
+      const current = findAccount(await this.store.read(), accountId);
+      if (!current?.signedIn || current.disabled || current.home !== account.home || isLimited(current, Date.now())) return;
+      if (Date.now() - (this.activeAt.get(accountId) ?? 0) < USAGE_BUSY_MS) return;
+      const model = account.family === "claude" ? this.prefs.claudePingModel : this.prefs.codexPingModel;
+      await adapter.ping?.(account.home, model);
+      // Upkeep reads selected accounts frequently, respecting each provider's usage spacing.
+    })().catch((error: unknown) => log(`quota ping for ${accountId} failed`, error))
+      .finally(() => this.pingsInFlight.delete(accountId));
+    this.pingsInFlight.set(accountId, task);
   }
 
   /** Records a reading and saves the readings shortly after, so a restart shows them straight away. */
@@ -1791,6 +1837,7 @@ function newAccount(fields: Pick<StoredAccount, "id" | "family" | "kind" | "home
     limitedUntil: null,
     limitKind: null,
     limitedAt: null,
+    lastQuotaPingAt: null,
     createdAt: new Date().toISOString(),
   };
 }

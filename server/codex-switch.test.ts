@@ -55,6 +55,7 @@ function account(id: string, label: string, home: string | null) {
     limitedUntil: null,
     limitKind: null,
     limitedAt: null,
+    lastQuotaPingAt: null,
     createdAt: "2026-09-23T00:00:00.000Z",
   };
 }
