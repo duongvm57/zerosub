@@ -21,6 +21,7 @@ import { detectClaudeLimit, detectClaudeSignOut } from "./limits";
 import { mainClaudeGlobalConfig } from "./paths";
 import { firstUrl, run, stripAnsi } from "./process";
 import { retryDelayMs } from "./usage";
+import { sendQuotaPing } from "./ping";
 
 const API = "https://api.anthropic.com";
 
@@ -78,6 +79,10 @@ export class ClaudeAdapter implements FamilyAdapter {
 
   prepareHome(home: string): Promise<void> {
     return prepareClaudeHome(home);
+  }
+
+  async ping(home: string | null, model: string): Promise<void> {
+    await sendQuotaPing(this.family, spawnEnv(await this.env(home)), model);
   }
 
   async identity(home: string | null): Promise<Identity> {

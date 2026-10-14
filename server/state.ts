@@ -26,6 +26,8 @@ export const StoredAccountSchema = z.object({
   limitKind: z.enum(["window", "budget"]).nullable().default(null),
   /** When the current limit was recorded. */
   limitedAt: z.string().nullable().default(null),
+  /** Recorded before sending, so restarts and uncertain failures cannot repeat a quota ping. */
+  lastQuotaPingAt: z.string().nullable().default(null),
   createdAt: z.string(),
 });
 export type StoredAccount = z.infer<typeof StoredAccountSchema>;

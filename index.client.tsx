@@ -18,7 +18,7 @@ export default function contribute(client: PluginClientContext) {
     title: "ZeroSub preferences",
     icon: "SlidersHorizontal",
     Component: (props) => (
-      <PreferencesScreen {...props} onOpenAccounts={() => client.openSurface("accounts")} />
+      <PreferencesScreen {...props} store={store} onOpenAccounts={() => client.openSurface("accounts")} />
     ),
   });
   client.addTimelineRenderer({

@@ -60,6 +60,14 @@ Some plans come with banked limit resets: ChatGPT's reset credits, and Claude Co
 - **Claude** uses Claude Code's limit-reset endpoint. Anthropic decides which accounts get resets; so far it reports the tested accounts as not eligible, so the button may not appear for Claude. It shows up by itself once an account has a reset.
 - **Use banked resets when every account is out** (off by default) spends one automatically, but only when every account of that provider is at its limit and the provider confirms the limit at that moment.
 
+### Start quota windows automatically
+
+In **Settings → Plugins → zerosub → ZeroSub preferences → Start quota windows**, turn on **Ping idle accounts automatically** and choose the accounts to ping. This is off by default, with no accounts selected. Each host keeps its own selection.
+
+ZeroSub sends one short **“Reply OK.”** message through the account's CLI when a fresh usage reading shows that its five-hour quota window is idle. This starts the window before you use the account for real work. A running weekly window does not prevent starting a new five-hour window. Disabled, signed-out and limited accounts are skipped, as are missing, failed or cached usage readings.
+
+Choose a **Claude ping model** and a **ChatGPT ping model**, then press **Save**. The defaults are `haiku` and `gpt-5.6-luna`; use a model available to your subscription. Pings use a small amount of quota, run outside your projects, and are not added to your chats. ZeroSub checks selected accounts about every minute (Claude's usage endpoint requires at least 90 seconds between reads). It records attempts before sending, so even a timeout or daemon restart waits at least five hours before another attempt on the same account. A failed ping is logged; check the selected model and sign-in before the next attempt.
+
 ### When every account of a provider is out
 
 ZeroSub tries these in order, and a timeline note says which one happened:
