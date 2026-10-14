@@ -141,6 +141,22 @@ describe("automatic quota pings", () => {
     expect(ping).not.toHaveBeenCalled();
   });
 
+  it("leaves the account eligible when a ping is skipped before sending", async () => {
+    const { service, account, adapter, ping, store, enable } = await harness();
+    vi.mocked(adapter.prepareHome).mockImplementationOnce(async () => {
+      service.setPreferences(preferences.schema.parse({ autoPing: false }));
+    });
+    enable();
+    await service.refreshUsage(account.id, true);
+    await vi.waitFor(() => expect(adapter.prepareHome).toHaveBeenCalled());
+    await service.refreshUsage(account.id, true);
+    expect(ping).not.toHaveBeenCalled();
+    expect((await store.read()).accounts[0]!.lastQuotaPingAt).toBeNull();
+    enable();
+    await service.refreshUsage(account.id, true);
+    await vi.waitFor(() => expect(ping).toHaveBeenCalledTimes(1));
+  });
+
   it("keeps the five-hour guard through uncertain failure and service restart", async () => {
     const { service, account, adapter, ping, usage, enable } = await harness();
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);

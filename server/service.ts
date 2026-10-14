@@ -1327,30 +1327,28 @@ export class Service {
     if (!hasIdleQuotaWindow(account.family, usage) || !account.signedIn || account.disabled) return;
     if (account.lastQuotaPingAt && Date.now() - Date.parse(account.lastQuotaPingAt) < QUOTA_PING_INTERVAL_MS) return;
     const task = (async () => {
+      const initial = findAccount(await this.store.read(), accountId);
+      if (!initial || this.stopped) return;
+      const adapter = this.adapters[initial.family];
+      if (initial.home) await adapter.prepareHome(initial.home);
       let selected: StoredAccount | undefined;
-      // Claim the attempt atomically before launching; concurrent reads and restarts cannot repeat it.
+      // Claim the attempt atomically right before sending; concurrent reads and restarts cannot repeat it.
       await this.store.update((draft) => {
         const account = findAccount(draft, accountId);
         const now = Date.now();
         if (!account || !account.signedIn || account.disabled || isLimited(account, now)) return;
         if (this.stopped || !this.prefs.autoPing || !this.prefs.pingAccountIds.includes(accountId)) return;
-        if (!this.adapters[account.family].ping || !hasIdleQuotaWindow(account.family, usage, now)) return;
+        if (account.home !== initial.home || !adapter.ping || !hasIdleQuotaWindow(account.family, usage, now)) return;
         if (now - (this.activeAt.get(accountId) ?? 0) < USAGE_BUSY_MS) return;
         const last = account.lastQuotaPingAt ? Date.parse(account.lastQuotaPingAt) : 0;
         if (now - last < QUOTA_PING_INTERVAL_MS) return;
         account.lastQuotaPingAt = new Date(now).toISOString();
         selected = { ...account };
       });
-      if (!selected || this.stopped) return;
-      const account = selected;
-      const adapter = this.adapters[account.family];
-      if (account.home) await adapter.prepareHome(account.home);
-      if (this.stopped || !this.prefs.autoPing || !this.prefs.pingAccountIds.includes(accountId)) return;
-      const current = findAccount(await this.store.read(), accountId);
-      if (!current?.signedIn || current.disabled || current.home !== account.home || isLimited(current, Date.now())) return;
-      if (Date.now() - (this.activeAt.get(accountId) ?? 0) < USAGE_BUSY_MS) return;
-      const model = account.family === "claude" ? this.prefs.claudePingModel : this.prefs.codexPingModel;
-      await adapter.ping?.(account.home, model);
+      if (!selected) return;
+      const target: StoredAccount = selected;
+      const model = target.family === "claude" ? this.prefs.claudePingModel : this.prefs.codexPingModel;
+      await adapter.ping?.(target.home, model);
       // Upkeep reads selected accounts frequently, respecting each provider's usage spacing.
     })().catch((error: unknown) => log(`quota ping for ${accountId} failed`, error))
       .finally(() => this.pingsInFlight.delete(accountId));
