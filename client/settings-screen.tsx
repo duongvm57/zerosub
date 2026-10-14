@@ -33,7 +33,7 @@ export function PreferencesScreen({ theme, host, store, onOpenAccounts }: Plugin
     );
   }
   const save = (patch: Partial<Preferences>) =>
-    void settings.save({ ...settings.values, ...patch }, settings.revision);
+    settings.save({ ...settings.values, ...patch }, settings.revision);
   return (
     <>
       {multiHost ? (
@@ -73,7 +73,9 @@ export function PreferencesScreen({ theme, host, store, onOpenAccounts }: Plugin
               Object.values(pingModels).some((model) => !model.trim() || model.trim().length > 200)}
             onPress={() => {
               const patch = Object.fromEntries(Object.entries(pingModels).map(([key, model]) => [key, model.trim()]));
-              save(patch);
+              void save(patch).then((saved) => {
+                if (saved !== false) setPingModels({});
+              }, () => undefined);
             }}
           />
           <Text style={muted}>Choose accounts on {host.label}. Disabled or signed-out accounts are skipped.</Text>
