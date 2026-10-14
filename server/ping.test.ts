@@ -153,8 +153,11 @@ describe("automatic quota pings", () => {
     expect(ping).not.toHaveBeenCalled();
     expect((await store.read()).accounts[0]!.lastQuotaPingAt).toBeNull();
     enable();
-    await service.refreshUsage(account.id, true);
-    await vi.waitFor(() => expect(ping).toHaveBeenCalledTimes(1));
+    // The skipped attempt may still be unwinding in the background; retry until it has released the account.
+    await vi.waitFor(async () => {
+      await service.refreshUsage(account.id, true);
+      expect(ping).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("keeps the five-hour guard through uncertain failure and service restart", async () => {
